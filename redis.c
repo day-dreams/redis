@@ -1549,7 +1549,7 @@ static void initServer() {
     server.el = aeCreateEventLoop();
     server.db = zmalloc(sizeof(redisDb)*server.dbnum);
     server.sharingpool = dictCreate(&setDictType,NULL);
-    server.fd = anetTcpServer(server.neterr, server.port, server.bindaddr);
+    server.fd = anetTcpServer(server.neterr, server.port, server.bindaddr);/*listening fd并不是非阻塞的*/
     if (server.fd == -1) {
         redisLog(REDIS_WARNING, "Opening TCP port: %s", server.neterr);
         exit(1);
@@ -1572,7 +1572,11 @@ static void initServer() {
     server.stat_numconnections = 0;
     server.stat_starttime = time(NULL);
     server.unixtime = time(NULL);
+
+    /*每段时间中断一下，做点server维护工作*/
     aeCreateTimeEvent(server.el, 1, serverCron, NULL, NULL);
+
+    /*listing fd的event handler*/
     if (aeCreateFileEvent(server.el, server.fd, AE_READABLE,
         acceptHandler, NULL) == AE_ERR) oom("creating file event");
 
@@ -2152,7 +2156,7 @@ static int processCommand(redisClient *c) {
 
     /* Now lookup the command and check ASAP about trivial error conditions
      * such wrong arity, bad command name and so forth. */
-    cmd = lookupCommand(c->argv[0]->ptr);
+    cmd = lookupCommand(c->argv[0]->ptr);/*查找命令table，返回对应的命令name、handler等*/
     if (!cmd) {
         addReplySds(c,
             sdscatprintf(sdsempty(), "-ERR unknown command '%s'\r\n",
@@ -2223,7 +2227,7 @@ static int processCommand(redisClient *c) {
     } else {
         if (server.vm_enabled && server.vm_max_threads > 0 &&
             blockClientOnSwappedKeys(cmd,c)) return 1;
-        call(c,cmd);
+        call(c,cmd);/*终于执行了命令*/
     }
 
     /* Prepare the client for the next command */
@@ -2301,6 +2305,10 @@ static void replicationFeedSlaves(list *slaves, struct redisCommand *cmd, int di
     if (outv != static_outv) zfree(outv);
 }
 
+/**
+ * client数据接收完毕后，变成block状态，这个handler会在稍后执行，处理命令
+ *
+ */
 static void processInputBuffer(redisClient *c) {
 again:
     /* Before to process the input buffer, make sure the client is not
@@ -2350,6 +2358,7 @@ again:
                 /* Execute the command. If the client is still valid
                  * after processCommand() return and there is something
                  * on the query buffer try to process the next command. */
+                /*执行命令*/
                 if (processCommand(c) && sdslen(c->querybuf)) goto again;
             } else {
                 /* Nothing to process, argc == 0. Just process the query
@@ -2383,6 +2392,9 @@ again:
     }
 }
 
+/**
+ * client socket的read handler
+ */
 static void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mask) {
     redisClient *c = (redisClient*) privdata;
     char buf[REDIS_IOBUF_LEN];
@@ -2410,6 +2422,8 @@ static void readQueryFromClient(aeEventLoop *el, int fd, void *privdata, int mas
     } else {
         return;
     }
+
+    /*这个redis阻塞状态是哪里设置的?*/
     if (!(c->flags & REDIS_BLOCKED))
         processInputBuffer(c);
 }
@@ -2453,6 +2467,7 @@ static redisClient *createClient(int fd) {
     c->blockingkeysnum = 0;
     c->io_keys = listCreate();
     listSetFreeMethod(c->io_keys,decrRefCount);
+    /*注册read handler*/
     if (aeCreateFileEvent(server.el, c->fd, AE_READABLE,
         readQueryFromClient, c) == AE_ERR) {
         freeClient(c);
@@ -2566,6 +2581,7 @@ static void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
         return;
     }
     redisLog(REDIS_VERBOSE,"Accepted %s:%d", cip, cport);
+    //2.创建client
     if ((c = createClient(cfd)) == NULL) {
         redisLog(REDIS_WARNING,"Error allocating resoures for the client");
         close(cfd); /* May be already closed, just ingore errors */
