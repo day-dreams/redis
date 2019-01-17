@@ -2548,6 +2548,9 @@ static void addReplyBulk(redisClient *c, robj *obj) {
     addReply(c,shared.crlf);
 }
 
+/**
+ * [server listen fd, accept handler]
+ */
 static void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     int cport, cfd;
     char cip[128];
@@ -2556,6 +2559,7 @@ static void acceptHandler(aeEventLoop *el, int fd, void *privdata, int mask) {
     REDIS_NOTUSED(mask);
     REDIS_NOTUSED(privdata);
 
+    //1.阻塞接受一个连接
     cfd = anetAccept(server.neterr, fd, cip, &cport);
     if (cfd == AE_ERR) {
         redisLog(REDIS_VERBOSE,"Accepting client connection: %s", server.neterr);
